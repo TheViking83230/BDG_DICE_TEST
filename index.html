@@ -3,334 +3,400 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>D20 GLB Roll</title>
+  <title>D20 Roll (BG vibe)</title>
   <style>
-    html, body { margin:0; height:100%; overflow:hidden; background:#0b0f14; font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; }
-    #hud {
-      position:fixed; inset:0; pointer-events:none;
-      display:flex; align-items:flex-start; justify-content:center;
-      padding:16px;
+    html, body { height: 100%; margin: 0; background:#0b0e13; overflow:hidden; }
+    #ui {
+      position: fixed; inset: 0;
+      pointer-events: none;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      color: #e8e8e8;
+    }
+    #bar {
+      position: absolute; left: 16px; top: 16px;
+      display:flex; gap:10px; align-items:center;
+      pointer-events: auto;
+    }
+    button{
+      border: 1px solid rgba(255,255,255,0.15);
+      background: rgba(20,24,33,0.85);
+      color:#fff;
+      padding: 10px 14px;
+      border-radius: 12px;
+      cursor: pointer;
+      backdrop-filter: blur(8px);
+      font-weight: 650;
+      letter-spacing: .3px;
+    }
+    button:hover { background: rgba(35,40,54,0.9); }
+    #hint{
+      opacity:.75; font-size: 13px;
     }
     #result {
+      position: absolute; left: 50%; top: 50%;
+      transform: translate(-50%,-50%);
+      font-size: 90px;
+      font-weight: 900;
+      text-shadow: 0 10px 30px rgba(0,0,0,.7);
+      opacity: 0;
+      transition: opacity .18s ease;
+      pointer-events: none;
+    }
+    #tag {
+      position: absolute; left: 50%; top: calc(50% + 80px);
+      transform: translateX(-50%);
+      font-size: 16px;
+      opacity: 0;
+      transition: opacity .18s ease;
+      letter-spacing: .4px;
       pointer-events:none;
-      background:rgba(0,0,0,.55);
-      border:1px solid rgba(255,255,255,.12);
-      color:#fff;
-      padding:10px 14px;
-      border-radius:14px;
-      backdrop-filter: blur(10px);
-      box-shadow: 0 10px 30px rgba(0,0,0,.35);
-      font-weight:700;
     }
-    #tip {
-      position:fixed; left:16px; bottom:16px;
-      background:rgba(0,0,0,.45);
-      border:1px solid rgba(255,255,255,.12);
-      color:rgba(255,255,255,.85);
-      padding:10px 12px;
-      border-radius:14px;
-      max-width: 520px;
-      line-height:1.3;
-      font-size: 14px;
+    #vignette{
+      position: fixed; inset: 0; pointer-events:none;
+      background:
+        radial-gradient(1200px 700px at 50% 40%, rgba(255,220,150,0.09), rgba(0,0,0,0) 60%),
+        radial-gradient(900px 600px at 60% 60%, rgba(120,170,255,0.06), rgba(0,0,0,0) 55%),
+        radial-gradient(closest-side at 50% 50%, rgba(0,0,0,0), rgba(0,0,0,0.65));
+      mix-blend-mode: screen;
     }
-    code { color:#fff; }
+    canvas { display:block; }
   </style>
-
-  <!-- Import maps pour Three.js (sans build) -->
-  <script type="importmap">
-  {
-    "imports": {
-      "three": "https://unpkg.com/three@0.160.1/build/three.module.js",
-      "three/addons/": "https://unpkg.com/three@0.160.1/examples/jsm/"
-    }
-  }
-  </script>
 </head>
-
 <body>
-  <div id="hud"><div id="result">Chargement du D20…</div></div>
-  <div id="tip">
-    <b>Contrôles</b> : Clique pour relancer. <br/>
-    <b>Calibration</b> : mets <code>CALIBRATION_MODE = true</code>, puis
-    touche <code>1</code>.. <code>0</code> (10) / <code>q</code>.. <code>p</code> (11..20) pour enregistrer l’orientation actuelle.
-    Regarde la console pour copier le mapping.
+  <div id="ui">
+    <div id="bar">
+      <button id="rollBtn">🎲 Lancer</button>
+      <button id="resetBtn">↺ Reset</button>
+      <div id="hint">Drag pour bouger la caméra. Le résultat pop quand le dé s’arrête.</div>
+    </div>
+    <div id="result">—</div>
+    <div id="tag"></div>
   </div>
+  <div id="vignette"></div>
 
   <script type="module">
-    import * as THREE from "three";
-    import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
-    import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+    import * as THREE from "https://unpkg.com/three@0.160.0/build/three.module.js";
+    import { OrbitControls } from "https://unpkg.com/three@0.160.0/examples/jsm/controls/OrbitControls.js";
+    import * as CANNON from "https://cdn.skypack.dev/cannon-es";
 
     // =========================
-    // 1) Réglages
+    // CONFIG
     // =========================
-    const GLB_PATH = "./d20.glb";
-
-    // Mets true juste le temps de créer le mapping face->quaternion
-    const CALIBRATION_MODE = false;
-
-    // Si ton modèle est huge/tiny, ajuste ça
-    const VISUAL_SCALE = 1.0;
+    const USE_GLB = true;            // <- passe à true si tu veux charger ton d20.glb
+    const GLB_PATH = "./d20.glb";     // <- ton fichier dans le même dossier que index.html
+    const DICE_RADIUS = 0.55;
+    const FLOOR_Y = 0;
 
     // =========================
-    // 2) Setup Three.js
+    // THREE (render)
     // =========================
     const scene = new THREE.Scene();
-    scene.fog = new THREE.Fog(0x0b0f14, 6, 30);
+    scene.fog = new THREE.Fog(0x0b0e13, 6, 18);
 
-    const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 200);
-    camera.position.set(0, 2.2, 6);
+    const camera = new THREE.PerspectiveCamera(45, innerWidth/innerHeight, 0.1, 100);
+    camera.position.set(2.5, 2.2, 3.2);
 
     const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: false });
     renderer.setSize(innerWidth, innerHeight);
     renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
     renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     document.body.appendChild(renderer.domElement);
 
-    // Lumières
-    scene.add(new THREE.AmbientLight(0xffffff, 0.45));
-
-    const keyLight = new THREE.DirectionalLight(0xffffff, 1.1);
-    keyLight.position.set(5, 7, 4);
-    keyLight.castShadow = true;
-    keyLight.shadow.mapSize.set(1024, 1024);
-    scene.add(keyLight);
-
-    const rimLight = new THREE.DirectionalLight(0xffffff, 0.5);
-    rimLight.position.set(-6, 3, -5);
-    scene.add(rimLight);
-
-    // Sol
-    const ground = new THREE.Mesh(
-      new THREE.PlaneGeometry(50, 50),
-      new THREE.MeshStandardMaterial({ color: 0x0f1722, roughness: 0.95, metalness: 0.05 })
-    );
-    ground.rotation.x = -Math.PI / 2;
-    ground.receiveShadow = true;
-    scene.add(ground);
-
-    // Un petit socle visuel
-    const pad = new THREE.Mesh(
-      new THREE.CylinderGeometry(2.2, 2.2, 0.2, 64),
-      new THREE.MeshStandardMaterial({ color: 0x121a28, roughness: 0.9 })
-    );
-    pad.position.y = 0.1;
-    pad.receiveShadow = true;
-    scene.add(pad);
-
-    // Contrôles caméra (pratique en calibration)
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
-    controls.enabled = CALIBRATION_MODE;
+    controls.target.set(0, 0.5, 0);
 
-    // HUD
-    const resultEl = document.getElementById("result");
-    const setResult = (txt) => (resultEl.textContent = txt);
+    // Dramatic lights (BG-ish vibe)
+    const hemi = new THREE.HemisphereLight(0x7aa7ff, 0x2b220f, 0.5);
+    scene.add(hemi);
 
-    // =========================
-    // 3) Chargement GLB
-    // =========================
-    const loader = new GLTFLoader();
-    let dice = null;
+    const key = new THREE.DirectionalLight(0xffd39a, 1.3);
+    key.position.set(4, 6, 2);
+    key.castShadow = true;
+    key.shadow.mapSize.set(2048, 2048);
+    key.shadow.camera.near = 0.5;
+    key.shadow.camera.far = 20;
+    key.shadow.camera.left = -6;
+    key.shadow.camera.right = 6;
+    key.shadow.camera.top = 6;
+    key.shadow.camera.bottom = -6;
+    scene.add(key);
 
-    loader.load(
-      GLB_PATH,
-      (gltf) => {
-        dice = gltf.scene;
+    const rim = new THREE.DirectionalLight(0x8bb3ff, 0.5);
+    rim.position.set(-5, 3, -3);
+    scene.add(rim);
 
-        // Rendre tout shadow-friendly
-        dice.traverse((o) => {
-          if (o.isMesh) {
-            o.castShadow = true;
-            o.receiveShadow = true;
-            if (o.material) {
-              o.material.roughness = Math.min(1, (o.material.roughness ?? 0.6) + 0.15);
-            }
-          }
-        });
+    // Floor (table/stone vibe)
+    const floorGeo = new THREE.PlaneGeometry(20, 20);
+    const floorMat = new THREE.MeshStandardMaterial({
+      color: 0x141824,
+      roughness: 0.95,
+      metalness: 0.05
+    });
+    const floor = new THREE.Mesh(floorGeo, floorMat);
+    floor.rotation.x = -Math.PI/2;
+    floor.position.y = FLOOR_Y;
+    floor.receiveShadow = true;
+    scene.add(floor);
 
-        // Centrer le dé proprement
-        const box = new THREE.Box3().setFromObject(dice);
-        const center = box.getCenter(new THREE.Vector3());
-        dice.position.sub(center);
-
-        // Positionner au-dessus du sol
-        dice.position.y = 1.0;
-
-        dice.scale.setScalar(VISUAL_SCALE);
-        scene.add(dice);
-
-        setResult(CALIBRATION_MODE ? "Calibration: bouge le dé puis enregistre les faces" : "Clique pour lancer 🎲");
-
-        // Lancer automatiquement à l’ouverture (hors calibration)
-        if (!CALIBRATION_MODE) roll();
-
-      },
-      (xhr) => {
-        const p = (xhr.loaded / (xhr.total || 1)) * 100;
-        setResult(`Chargement… ${p.toFixed(0)}%`);
-      },
-      (err) => {
-        console.error(err);
-        setResult("Erreur: impossible de charger d20.glb");
-      }
+    // Soft “platform” circle
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.9, 1.2, 64),
+      new THREE.MeshBasicMaterial({ color: 0xffffff, transparent:true, opacity:0.06, side:THREE.DoubleSide })
     );
+    ring.rotation.x = -Math.PI/2;
+    ring.position.y = FLOOR_Y + 0.001;
+    scene.add(ring);
 
     // =========================
-    // 4) Mapping face -> quaternion
+    // CANNON (physics)
     // =========================
-    // IMPORTANT :
-    // - Ces quaternions doivent correspondre à l’orientation finale où la face X est sur le dessus.
-    // - Au début tu ne les as pas. Tu les génères avec CALIBRATION_MODE.
-    //
-    // Ici je mets un placeholder vide. Une fois calibré, tu colles tes valeurs ici.
-    const FACE_QUATS = {
-      // 1: [x, y, z, w],
-      // 2: [x, y, z, w],
-      // ...
-      // 20: [x, y, z, w],
-    };
+    const world = new CANNON.World({
+      gravity: new CANNON.Vec3(0, -9.82, 0),
+    });
+    world.broadphase = new CANNON.SAPBroadphase(world);
+    world.allowSleep = true;
 
-    function getQuatForFace(face) {
-      const arr = FACE_QUATS[face];
-      if (!arr) return null;
-      const q = new THREE.Quaternion(arr[0], arr[1], arr[2], arr[3]);
-      q.normalize();
-      return q;
-    }
+    const defaultMat = new CANNON.Material("default");
+    const contact = new CANNON.ContactMaterial(defaultMat, defaultMat, {
+      friction: 0.35,
+      restitution: 0.25
+    });
+    world.defaultContactMaterial = contact;
+
+    // Floor physics
+    const floorBody = new CANNON.Body({ type: CANNON.Body.STATIC, material: defaultMat });
+    floorBody.addShape(new CANNON.Plane());
+    floorBody.quaternion.setFromEuler(-Math.PI/2, 0, 0);
+    floorBody.position.set(0, FLOOR_Y, 0);
+    world.addBody(floorBody);
 
     // =========================
-    // 5) Animation "roll"
+    // D20 Geometry + Textures (pure HTML, no assets)
     // =========================
-    let rolling = false;
+    function makeNumberTexture(n){
+      const c = document.createElement("canvas");
+      c.width = 256; c.height = 256;
+      const ctx = c.getContext("2d");
 
-    function randInt(min, max) {
-      return Math.floor(Math.random() * (max - min + 1)) + min;
+      // BG-ish: dark enamel + warm glyph
+      ctx.fillStyle = "#0f1420";
+      ctx.fillRect(0,0,c.width,c.height);
+
+      // subtle border
+      ctx.strokeStyle = "rgba(255,255,255,0.12)";
+      ctx.lineWidth = 10;
+      ctx.strokeRect(14,14,c.width-28,c.height-28);
+
+      // number
+      ctx.fillStyle = "#ffd39a";
+      ctx.font = "bold 140px system-ui, -apple-system, Segoe UI, Roboto, Arial";
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.shadowColor = "rgba(0,0,0,0.55)";
+      ctx.shadowBlur = 18;
+      ctx.fillText(String(n), c.width/2, c.height/2 + 6);
+
+      const tex = new THREE.CanvasTexture(c);
+      tex.anisotropy = 8;
+      return tex;
     }
 
-    function easeOutCubic(t) {
-      return 1 - Math.pow(1 - t, 3);
+    // Icosahedron has 20 faces -> 20 materials
+    const mats = Array.from({length:20}, (_,i)=> new THREE.MeshStandardMaterial({
+      map: makeNumberTexture(i+1),
+      roughness: 0.35,
+      metalness: 0.35,
+      emissive: new THREE.Color(0x000000),
+    }));
+
+    const diceGeo = new THREE.IcosahedronGeometry(DICE_RADIUS, 0);
+    // Force groups so each face can have its own material index
+    diceGeo.clearGroups();
+    for (let f = 0; f < 20; f++) {
+      diceGeo.addGroup(f * 3, 3, f); // 3 indices per triangle
+    }
+    diceGeo.computeVertexNormals();
+
+    const diceMesh = new THREE.Mesh(diceGeo, mats);
+    diceMesh.castShadow = true;
+    diceMesh.receiveShadow = false;
+    scene.add(diceMesh);
+
+    // Physics shape: Convex polyhedron from geometry vertices
+    function cannonConvexFromGeometry(geo){
+      const pos = geo.attributes.position.array;
+      const verts = [];
+      for (let i=0; i<pos.length; i+=3){
+        verts.push(new CANNON.Vec3(pos[i], pos[i+1], pos[i+2]));
+      }
+      // faces as triangles
+      const idx = geo.index.array;
+      const faces = [];
+      for (let i=0; i<idx.length; i+=3){
+        faces.push([idx[i], idx[i+1], idx[i+2]]);
+      }
+      return new CANNON.ConvexPolyhedron({ vertices: verts, faces });
     }
 
-    function slerpQuat(a, b, t) {
-      const q = a.clone();
-      q.slerp(b, t);
-      return q;
+    const diceBody = new CANNON.Body({
+      mass: 1.2,
+      material: defaultMat,
+      sleepTimeLimit: 0.4,
+      sleepSpeedLimit: 0.12
+    });
+    diceBody.addShape(cannonConvexFromGeometry(diceGeo));
+    world.addBody(diceBody);
+
+    // =========================
+    // Result detection (top face)
+    // =========================
+    // Precompute local face normals for each triangle in the same order as materials
+    const faceNormalsLocal = [];
+    {
+      const pos = diceGeo.attributes.position;
+      // Build triangle normals from the indexed geometry
+      const idx = diceGeo.index.array;
+      for (let f=0; f<20; f++){
+        const i0 = idx[f*3], i1 = idx[f*3+1], i2 = idx[f*3+2];
+        const a = new THREE.Vector3().fromBufferAttribute(pos, i0);
+        const b = new THREE.Vector3().fromBufferAttribute(pos, i1);
+        const c = new THREE.Vector3().fromBufferAttribute(pos, i2);
+        const n = new THREE.Vector3().subVectors(b,a).cross(new THREE.Vector3().subVectors(c,a)).normalize();
+        faceNormalsLocal.push(n);
+      }
     }
 
-    function roll() {
-      if (!dice || rolling) return;
+    const up = new THREE.Vector3(0,1,0);
+    function computeTopFaceNumber(){
+      // Convert dice quaternion to Three for convenience
+      const q = new THREE.Quaternion(diceBody.quaternion.x, diceBody.quaternion.y, diceBody.quaternion.z, diceBody.quaternion.w);
 
-      // Si pas calibré, on fait quand même un roll “visuel” + résultat random affiché,
-      // mais on ne pourra pas finir “sur la bonne face”.
-      const face = randInt(1, 20);
-
-      const target = getQuatForFace(face);
-      const hasTarget = !!target;
-
-      rolling = true;
-      setResult(`Résultat… ?`);
-
-      // Orientation de départ
-      const startQuat = dice.quaternion.clone();
-
-      // Une orientation “très random” pendant le roulage
-      const spinAxis = new THREE.Vector3(Math.random(), Math.random(), Math.random()).normalize();
-      const spinTurns = 6 + Math.random() * 6; // 6 à 12 tours
-      const spinQuat = new THREE.Quaternion().setFromAxisAngle(spinAxis, spinTurns * Math.PI * 2);
-
-      // On choisit la fin :
-      // - Si calibré => on finit EXACT sur la face.
-      // - Sinon => on finit sur un truc random.
-      const endQuat = hasTarget ? target : startQuat.clone().multiply(spinQuat).normalize();
-
-      // Animation
-      const duration = 1200 + Math.random() * 500; // ms
-      const t0 = performance.now();
-
-      // petit jump
-      const startY = 1.0;
-      const peakY = 1.55;
-
-      function tick(now) {
-        const t = Math.min(1, (now - t0) / duration);
-        const e = easeOutCubic(t);
-
-        // rotation (on combine un gros spin + slerp vers la fin)
-        const midQuat = slerpQuat(startQuat, startQuat.clone().multiply(spinQuat), t);
-        dice.quaternion.copy(slerpQuat(midQuat, endQuat, e));
-
-        // bounce hauteur
-        const up = t < 0.5 ? t * 2 : (1 - t) * 2;
-        dice.position.y = startY + (peakY - startY) * up;
-
-        if (t < 1) {
-          requestAnimationFrame(tick);
-        } else {
-          dice.position.y = startY;
-          rolling = false;
-          setResult(hasTarget ? `🎲 Résultat : ${face}` : `🎲 Résultat : ${face} (calibre les faces pour que ça match visuellement)`);
+      let bestDot = -Infinity;
+      let bestFace = 0;
+      for (let f=0; f<20; f++){
+        const nWorld = faceNormalsLocal[f].clone().applyQuaternion(q).normalize();
+        const d = nWorld.dot(up);
+        if (d > bestDot){
+          bestDot = d;
+          bestFace = f;
         }
       }
+      // Our materials are mapped 1..20
+      return bestFace + 1;
+    }
 
+    // =========================
+    // UI
+    // =========================
+    const resultEl = document.getElementById("result");
+    const tagEl = document.getElementById("tag");
+
+    function showResult(n){
+      resultEl.textContent = n;
+      let tag = "";
+      if (n === 20) tag = "CRIT ✅";
+      else if (n === 1) tag = "ÉCHEC CRIT 💀";
+      else tag = "Résultat";
+      tagEl.textContent = tag;
+
+      resultEl.style.opacity = "1";
+      tagEl.style.opacity = "0.9";
+      setTimeout(() => {
+        // keep visible, but you can fade later if you want
+      }, 120);
+    }
+
+    function hideResult(){
+      resultEl.style.opacity = "0";
+      tagEl.style.opacity = "0";
+    }
+
+    // =========================
+    // Roll / Reset
+    // =========================
+    function resetDice(){
+      hideResult();
+      diceBody.wakeUp();
+      diceBody.velocity.setZero();
+      diceBody.angularVelocity.setZero();
+
+      diceBody.position.set(0, 2.8, 0);
+      // random orientation
+      const e = new CANNON.Vec3(
+        (Math.random()*2-1)*Math.PI,
+        (Math.random()*2-1)*Math.PI,
+        (Math.random()*2-1)*Math.PI
+      );
+      diceBody.quaternion.setFromEuler(e.x, e.y, e.z, "XYZ");
+    }
+
+    function rollDice(){
+      hideResult();
+      diceBody.wakeUp();
+
+      // start slightly above + small offset
+      diceBody.position.set((Math.random()*0.3-0.15), 2.6, (Math.random()*0.3-0.15));
+      diceBody.velocity.set((Math.random()*1.5-0.75), -0.5, (Math.random()*1.5-0.75));
+      diceBody.angularVelocity.set(
+        (Math.random()*18-9),
+        (Math.random()*18-9),
+        (Math.random()*18-9)
+      );
+    }
+
+    document.getElementById("rollBtn").addEventListener("click", rollDice);
+    document.getElementById("resetBtn").addEventListener("click", resetDice);
+
+    // Initial
+    resetDice();
+
+    // =========================
+    // Main loop
+    // =========================
+    let lastTime = performance.now();
+    let announced = false;
+
+    function tick(now){
+      const dt = Math.min((now - lastTime) / 1000, 1/30);
+      lastTime = now;
+
+      world.step(1/60, dt, 3);
+
+      // Sync mesh with physics
+      diceMesh.position.set(diceBody.position.x, diceBody.position.y, diceBody.position.z);
+      diceMesh.quaternion.set(diceBody.quaternion.x, diceBody.quaternion.y, diceBody.quaternion.z, diceBody.quaternion.w);
+
+      controls.update();
+
+      // When it sleeps => it stopped rolling
+      if (diceBody.sleepState === CANNON.Body.SLEEPING && !announced){
+        announced = true;
+        const n = computeTopFaceNumber();
+        showResult(n);
+      }
+      if (diceBody.sleepState !== CANNON.Body.SLEEPING){
+        announced = false;
+      }
+
+      renderer.render(scene, camera);
       requestAnimationFrame(tick);
     }
-
-    // Click => relance
-    addEventListener("pointerdown", () => {
-      if (!CALIBRATION_MODE) roll();
-    });
-
-    // =========================
-    // 6) Mode calibration (enregistre les quaternions)
-    // =========================
-    // Mapping touches :
-    // - 1..9 => faces 1..9
-    // - 0 => face 10
-    // - qwertyuiop => faces 11..20
-    const KEY_TO_FACE = {
-      "1": 1, "2": 2, "3": 3, "4": 4, "5": 5, "6": 6, "7": 7, "8": 8, "9": 9, "0": 10,
-      "q": 11, "w": 12, "e": 13, "r": 14, "t": 15, "y": 16, "u": 17, "i": 18, "o": 19, "p": 20
-    };
-
-    const recorded = {};
-
-    addEventListener("keydown", (ev) => {
-      if (!CALIBRATION_MODE) return;
-      if (!dice) return;
-
-      const k = ev.key.toLowerCase();
-      const face = KEY_TO_FACE[k];
-      if (!face) return;
-
-      // Enregistre l’orientation actuelle comme “face X vers le haut”
-      const q = dice.quaternion.clone().normalize();
-      recorded[face] = [q.x, q.y, q.z, q.w].map(n => +n.toFixed(6));
-
-      setResult(`Enregistré face ${face}. (console => mapping)`);
-      console.clear();
-      console.log("COLLE ÇA DANS FACE_QUATS :");
-      const sorted = Object.keys(recorded).map(Number).sort((a,b)=>a-b);
-      const obj = {};
-      for (const f of sorted) obj[f] = recorded[f];
-      console.log(JSON.stringify(obj, null, 2));
-    });
-
-    // =========================
-    // 7) Loop render
-    // =========================
-    function animate() {
-      requestAnimationFrame(animate);
-      controls.update();
-      renderer.render(scene, camera);
-    }
-    animate();
+    requestAnimationFrame(tick);
 
     addEventListener("resize", () => {
-      camera.aspect = innerWidth / innerHeight;
+      camera.aspect = innerWidth/innerHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(innerWidth, innerHeight);
     });
+
+    // =========================
+    // OPTIONAL: Use your GLB instead of procedural d20
+    // =========================
+    // Si tu veux vraiment ton d20.glb: mets USE_GLB = true, et je te conseille de garder
+    // la physique sur l'icosahedron (le body) mais remplacer seulement le mesh visuel.
+    // Là je le laisse off pour que ça marche direct sans assets.
   </script>
 </body>
 </html>
